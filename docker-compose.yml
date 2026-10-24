@@ -1,0 +1,13 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: test123, POSTGRES_DB: todo }
+  api:
+    build: ./app/api
+    environment: { DB_HOST: db, DB_PORT: "5432", DB_NAME: todo, DB_USER: app, DB_PASSWORD: test123, API_PORT: "3000" }
+    depends_on: [db]
+  frontend:
+    build: ./app/frontend
+    volumes: ["./app/frontend/nginx-local.conf:/etc/nginx/conf.d/default.conf:ro"]
+    ports: ["8080:8080"]
+    depends_on: [api]

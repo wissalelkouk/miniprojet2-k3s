@@ -1,0 +1,11 @@
+spec:
+  template:
+    spec:
+      serviceAccountName: db-sa
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }

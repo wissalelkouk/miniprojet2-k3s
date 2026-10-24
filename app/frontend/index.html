@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"><title>Todo</title></head>
+<body>
+<h1>Mes tâches</h1>
+<input id="t" placeholder="Nouvelle tâche"><button onclick="add()">Ajouter</button>
+<ul id="list"></ul>
+<script>
+async function load(){
+  const r = await fetch('/api/tasks'); const d = await r.json();
+  list.innerHTML = d.map(x => `<li>
+    <input type="checkbox" ${x.done?'checked':''} onchange="toggle(${x.id},this.checked)">
+    ${x.title} <button onclick="del(${x.id})">Supprimer</button></li>`).join('');
+}
+async function add(){
+  if(!t.value.trim()) return;
+  await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t.value})});
+  t.value=''; load();
+}
+async function toggle(id,done){
+  await fetch('/api/tasks/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({done})}); load();
+}
+async function del(id){ await fetch('/api/tasks/'+id,{method:'DELETE'}); load(); }
+load();
+</script></body></html>
