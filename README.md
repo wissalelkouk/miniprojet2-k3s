@@ -46,6 +46,7 @@ app/
   frontend/   index.html, Dockerfile, nginx-local.conf
 docker-compose.yml        (test local)
 secret.example.yaml       (modèle, aucune valeur réelle)
+captures/                 captures d'écran référencées par ce README
 k8s/
   00-namespace/  namespace, quota, limitrange
   10-config/     configmap.yaml (secret.yaml est ignoré par Git)
@@ -125,7 +126,7 @@ Résultat observé : dump `dump-20261024-2001.sql`, suppression de la tâche id 
 
 ## 7. Tableau des exigences E1 à E15 et preuves
 
-Les captures sont à nommer `E<n>_...png` et insérées dans le compte rendu.
+Les sorties et captures correspondantes sont regroupées au §11 (dossier `captures/`).
 
 | N° | Exigence | Réalisation | Commande de preuve (📸) |
 |---|---|---|---|
@@ -222,23 +223,172 @@ Par défaut, chaque Pod reçoit un jeton d'accès à l'API Kubernetes. Si l'appl
 **Phase 10 : pourquoi poser d'abord un « deny all » ? Quelle limite pour une politique qui ne filtre que le trafic entrant ?**
 On part d'une base fermée et on ajoute des autorisations explicites (liste blanche), au lieu de tout laisser ouvert. Une politique `Ingress` ne contrôle pas les connexions sortantes : un Pod compromis peut joindre Internet ou d'autres Pods dont l'entrée est ouverte (exfiltration). Il faut aussi des politiques `Egress`, avec une exception pour le DNS.
 
-## 11. Liste des captures à insérer
+## 11. Preuves et captures
 
-| Capture | Exigence |
-|---|---|
-| CRUD complet en local (Docker Compose, tâche cochée, liste vide) | Phase 0 |
-| `docker images` + `k3s ctr images ls` sur les 3 VMs | E1 |
-| `describe quota`, `describe limitrange`, Pod avec valeurs par défaut | E2 |
-| `get configmap,secret`, `git check-ignore` | E3, E4 |
-| `get sts,svc,pvc`, `\conninfo` | E5 |
-| `SELECT` avant/après suppression de `db-0`, `get pod -o wide`, `ls` du dossier du volume sur agent2 | E6 |
-| `get pods`, logs API, `describe pod` (probes, resources) | E7, E8, E9 |
-| `get ingress`, navigateur `app.k3s.local` | E10 |
-| `get cronjob,job`, `ls -l /backup`, restauration avant/après | E11 |
-| Trois `auth can-i`, `ls /var/run/secrets` | E12 |
-| `id` (uid 1000), `securityContext` de `db-0`, warnings `restricted` | E13 |
-| `get netpol`, témoin `open`, intrus et frontend bloqués, job `Complete`, navigateur | E14 |
-| `git log`, `ls -R k8s` | E15 |
+Les images sont dans le dossier `captures/` du dépôt. Les blocs de texte reprennent les sorties réelles relevées sur le cluster ; les captures d'écran marquées « à ajouter » sont à enregistrer sous le nom indiqué dans `captures/` (le lien Markdown s'affichera alors automatiquement).
+
+### E1 : images versionnées et présentes sur les nœuds (option B)
+Sur `k3s-agent1` (`sudo k3s ctr images ls | grep todo`) :
+```
+docker.io/wissl/todo-api:1.0.0        application/vnd.oci.image.manifest.v1+json  sha256:9109bad8...  142.3 MiB linux/amd64
+docker.io/wissl/todo-frontend:1.0.0   application/vnd.oci.image.manifest.v1+json  sha256:96e1f567...  47.4 MiB  linux/amd64
+```
+Pods de test démarrés sur `k3s-agent2` (aucun `ImagePullBackOff`) :
+```
+test-api     1/1   Running   10.42.2.2   k3s-agent2
+test-front   1/1   Running   10.42.2.3   k3s-agent2
+```
+![E1 images sur le master](captures/E1_images_master.png)
+![E1 images sur agent1](captures/E1_images_agent1.png)
+![E1 images sur agent2](captures/E1_images_agent2.png)
+
+### E2 : namespace, quota, LimitRange
+```
+$ kubectl describe quota -n todo
+Resource                Used  Hard
+limits.cpu              0     4
+limits.memory           0     4Gi
+persistentvolumeclaims  0     5
+pods                    0     20
+requests.cpu            0     2
+requests.memory         0     2Gi
+
+$ kubectl describe limitrange -n todo
+Type        Resource  Default Request  Default Limit
+Container   cpu       50m              200m
+Container   memory    64Mi             256Mi
+```
+![E2 quota et limitrange](captures/E2_quota_limitrange.png)
+
+### E3 : ConfigMap et Secret
+```
+$ kubectl get configmap,secret -n todo
+configmap/app-config         4      7s
+configmap/kube-root-ca.crt   1      5m56s
+secret/db-credentials   Opaque   2      7s
+```
+![E3 configmap et secret](captures/E3_configmap_secret.png)
+
+### E4 : aucun secret réel dans Git
+`git check-ignore -v k8s/10-config/secret.yaml` doit citer la règle de `.gitignore`, et `git ls-files | grep -i secret` ne doit afficher que `secret.example.yaml`.
+![E4 secret ignoré par Git](captures/E4_git_secret_ignore.png)
+
+### E5 : StatefulSet, PVC et Service headless
+```
+$ kubectl get pods -n todo
+db-0   1/1   Running   0   65s
+
+$ kubectl get pvc -n todo
+data-db-0   Bound   pvc-fc72fd02-05d1-4c61-8b49-5405d77b0a2c   1Gi   RWO   local-path
+```
+![E5 statefulset pvc service](captures/E5_statefulset_pvc.png)
+
+### E6 : persistance des données
+Après `kubectl delete pod db-0 -n todo`, `db-0` revient sur le même nœud et les données sont identiques :
+```
+$ kubectl get pod db-0 -n todo -o wide
+db-0   1/1   Running   0   29s   10.42.2.47   k3s-agent2
+
+$ SELECT * FROM tasks;
+ id |    title     | done
+----+--------------+------
+  1 | test k8s     | f
+  2 | kuberneties  | f
+
+$ sudo ls /var/lib/rancher/k3s/storage/      (sur k3s-agent2)
+pvc-fc72fd02-05d1-4c61-8b49-5405d77b0a2c_todo_data-db-0
+```
+![E6 persistance](captures/E6_persistance.png)
+
+### E7, E8, E9 : démarrage ordonné, ressources, sondes
+```
+$ kubectl get pods -n todo -o wide
+api-...-4p7j2   1/1   Running   10.42.1.60   k3s-agent1
+api-...-b5kl9   1/1   Running   10.42.2.25   k3s-agent2
+db-0            1/1   Running   10.42.2.19   k3s-agent2
+frontend-...    1/1   Running   10.42.2.26   k3s-agent2
+
+$ kubectl logs deploy/api -n todo
+API listening on 3000
+DB connection OK, table ready
+```
+Chaîne complète frontend → API → base testée par `curl` :
+```
+$ curl -s localhost:8081/api/tasks
+[]
+$ curl -s -X POST localhost:8081/api/tasks -H 'Content-Type: application/json' -d '{"title":"test k8s"}'
+{"id":1,"title":"test k8s","done":false}
+```
+![E7 E8 E9 pods sondes ressources](captures/E7_E8_E9_pods_sondes.png)
+
+### E10 : Ingress, seul le frontend est exposé
+```
+$ kubectl get ingress -n todo
+todo-ingress   traefik   app.k3s.local   172.25.240.127,172.25.244.254,172.25.252.47   80
+```
+![E10 application dans le navigateur](captures/E10_navigateur_app-k3s-local.png)
+
+### E11 : sauvegarde et restauration
+```
+$ kubectl get jobs,pods -n todo
+job.batch/test-backup   Complete   1/1   8s
+pod/test-backup-zn5sn   0/1   Completed
+
+Dump utilisé : dump-20261024-2001.sql
+$ DELETE FROM tasks WHERE id=1;      -> DELETE 1   (reste seulement l'id 2)
+$ TRUNCATE tasks;                    -> TRUNCATE TABLE
+$ restauration du dump               -> COPY 2
+$ SELECT * FROM tasks;               -> id 1 « test k8s » et id 2 « kuberneties » de nouveau présents
+```
+Après durcissement du CronJob : `job.batch/test-sec   Complete   1/1   6s`.
+![E11 sauvegarde et restauration](captures/E11_sauvegarde_restauration.png)
+
+### E12 : RBAC
+```
+$ kubectl auth can-i list pods   --as=system:serviceaccount:todo:dev-viewer -n todo   -> yes
+$ kubectl auth can-i delete pods --as=system:serviceaccount:todo:dev-viewer -n todo   -> no
+$ kubectl auth can-i get secrets --as=system:serviceaccount:todo:dev-viewer -n todo   -> no
+$ kubectl get pod -n todo -l tier=api -o jsonpath='{.items[0].spec.serviceAccountName}'   -> api-sa
+$ kubectl exec deploy/api -n todo -- ls /var/run/secrets/kubernetes.io
+ls: /var/run/secrets/kubernetes.io: No such file or directory
+```
+![E12 rbac](captures/E12_rbac_can-i.png)
+
+### E13 : durcissement des Pods
+```
+$ kubectl exec deploy/api -n todo -- id
+uid=1000(node) gid=1000(node) groups=1000(node)
+
+$ kubectl get pod db-0 -n todo -o jsonpath='{.spec.containers[0].securityContext}'
+{"allowPrivilegeEscalation":false,"capabilities":{"add":["CHOWN","SETUID","SETGID","FOWNER","DAC_OVERRIDE"],"drop":["ALL"]}}
+```
+Test du niveau `restricted` sur le namespace (les Pods API et frontend recréés passent) :
+```
+Warning: db-0: unrestricted capabilities, runAsNonRoot != true
+Warning: db-backup-29881205-xplwj (and 1 other pod): allowPrivilegeEscalation != false, unrestricted capabilities, runAsNonRoot != true, seccompProfile
+```
+Le namespace est ensuite remis à `baseline`.
+![E13 securityContext et pod security](captures/E13_durcissement.png)
+
+### E14 : NetworkPolicies et tests de blocage
+Résultats : API → db `open` (exit=0) ; intrus et frontend → db `exit=1` ; job de sauvegarde `Complete 1/1` ; `get netpol` liste 4 politiques.
+```
+$ kubectl exec deploy/api -n todo -- sh -c 'nc -zv -w 3 db 5432; echo exit=$?'
+db (10.42.2.154:5432) open
+exit=0
+```
+![E14 tests réseau, partie 1](captures/E14_tests_reseau_1.png)
+![E14 intrus et frontend bloqués](captures/E14_tests_reseau_2.png)
+![E14 navigateur après NetworkPolicies](captures/E14_navigateur_apres_netpol.png)
+
+### E15 : dépôt Git
+![E15 historique Git](captures/E15_git_log.png)
+
+### Captures des difficultés rencontrées
+![Push Docker Hub unauthorized](captures/Difficulte_push_dockerhub_unauthorized.png)
+![IP DHCP master](captures/Difficulte_ip_dhcp_master.png)
+![IP DHCP agent1](captures/Difficulte_ip_dhcp_agent1.png)
+![IP DHCP agent2](captures/Difficulte_ip_dhcp_agent2.png)
 
 ## 12. Difficultés rencontrées et enseignements
 
